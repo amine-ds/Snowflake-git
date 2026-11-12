@@ -40,7 +40,6 @@ sql/                         scripts SQL à déployer (un fichier = un bloc
 scripts/lint_sql.py
 scripts/deploy_snowflake.py
 scripts/requirements.txt
-deploy_order.txt            optionnel, voir section 5 (gestion des dépendances)
 ```
 
 Copier ce dossier `snowflake-cicd/` à la racine du repo GitHub (fusionner
@@ -157,26 +156,37 @@ seule requête (`cur.execute`), car vos scripts sont des blocs anonymes
 
 Quand une PR modifie plusieurs fichiers `.sql` qui dépendent les uns des
 autres (un script crée/alimente une table que lit un autre script), l'ordre
-d'exécution compte. Le déploiement applique trois règles, dans cet ordre :
+d'exécution compte. Le déploiement applique deux règles, dans cet ordre :
 
 1. **Organiser `sql/` par zone** : `sql/brz/...`, `sql/slv/...`,
    `sql/gld/...`. Le script de déploiement déploie toujours les zones dans
    cet ordre fixe (bronze → silver → gold), quel que soit l'ordre renvoyé
    par `git diff`, car une dépendance entre zones va presque toujours de
    la source vers les couches dérivées.
-2. **Au sein d'une même zone**, tri alphabétique par défaut. Suffisant tant
-   que deux scripts du même niveau ne dépendent pas l'un de l'autre.
-3. **Cas particulier (deux scripts de la même zone interdépendants)** :
-   ajouter à la racine du repo un fichier `deploy_order.txt` listant les
-   chemins concernés, un par ligne, dans l'ordre voulu. S'il est présent,
-   il prime sur les deux règles précédentes pour les fichiers qu'il liste ;
-   les autres fichiers de la PR suivent la règle zone+alpha habituelle.
-   Ce fichier n'a besoin d'exister que le temps de la PR concernée (on peut
-   le supprimer ensuite, ou le garder comme journal des cas particuliers).
+2. **Au sein d'une même zone** (ou pour tout cas particulier), déclarer la
+   dépendance **dans l'en-tête du script qui en a besoin** :
+   ```sql
+   --DEPLOY_AFTER: sql/slv/autre_script.sql
+   ```
+   (plusieurs chemins possibles, séparés par des virgules). Le script de
+   déploiement fait alors un tri topologique : le(s) fichier(s) listé(s)
+   sont déployés avant celui qui les déclare, et une dépendance circulaire
+   fait échouer le job avec une erreur explicite. Le lint vérifie que le
+   chemin référencé existe bien dans le repo.
+
+   **Pourquoi pas un fichier manifeste partagé (`deploy_order.txt`) à la
+   racine du repo ?** Parce que deux PR ouvertes en parallèle qui auraient
+   chacune besoin d'y ajouter une ligne entreraient en conflit Git l'une
+   avec l'autre au moment du merge — voire, pire, une PR basée sur un
+   `main` plus ancien pourrait écraser silencieusement l'entrée ajoutée par
+   une autre PR déjà mergée. En mettant la déclaration dans l'en-tête du
+   fichier lui-même, chaque PR ne touche que les fichiers qu'elle modifie
+   réellement : aucun fichier partagé, donc aucun risque de conflit.
 
 Une dépendance vers un objet déployé lors d'une PR **précédente** (donc
-déjà en base) n'a pas besoin d'être déclarée : seules les dépendances
-*entre fichiers modifiés dans la même PR* nécessitent cet ordonnancement.
+déjà en base) n'a pas besoin d'être déclarée : ce fichier n'apparaît pas
+dans la liste des fichiers modifiés de la PR courante, donc n'entre pas
+dans le tri.
 
 ## 6. Ce qui reste à décider avec l'équipe
 

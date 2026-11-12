@@ -10,6 +10,7 @@ Vérifie les bonnes pratiques attendues par l'équipe Manitowoc :
   - pas de mot de passe ou de clé en clair dans le script
   - fichier rangé sous sql/<brz|slv|gld>/... (ordonnancement des
     dépendances entre scripts lors du déploiement, voir README section 5)
+  - si le script déclare --DEPLOY_AFTER: <chemin>, ce chemin doit exister
 
 Usage: python lint_sql.py fichier1.sql fichier2.sql ...
 Exit code != 0 si au moins un fichier contient une violation bloquante.
@@ -106,6 +107,30 @@ def check_secrets(raw: str, path: str) -> list[Violation]:
     return violations
 
 
+DEPLOY_AFTER_PATTERN = re.compile(r"--\s*DEPLOY_AFTER\s*:\s*(.+)", re.IGNORECASE)
+
+
+def check_deploy_after(raw: str, path: str) -> list[Violation]:
+    violations = []
+    for i, line in enumerate(raw.splitlines(), start=1):
+        m = DEPLOY_AFTER_PATTERN.search(line)
+        if not m:
+            continue
+        for dep in [d.strip() for d in m.group(1).split(",") if d.strip()]:
+            if dep == path:
+                violations.append(
+                    Violation(path, i, "no-self-dependency", "Un script ne peut pas déclarer DEPLOY_AFTER sur lui-même.")
+                )
+            elif not Path(dep).is_file():
+                violations.append(
+                    Violation(
+                        path, i, "deploy-after-target-missing",
+                        f"DEPLOY_AFTER référence '{dep}', introuvable dans le repo (chemin incorrect ?).",
+                    )
+                )
+    return violations
+
+
 def check_zone_folder(path: str) -> list[Violation]:
     parts = Path(path).parts
     violations = []
@@ -130,6 +155,7 @@ def lint_file(path: str) -> list[Violation]:
     violations += check_header_comment(raw, path)
     violations += check_secrets(raw, path)
     violations += check_zone_folder(path)
+    violations += check_deploy_after(raw, path)
     return violations
 
 

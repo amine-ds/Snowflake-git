@@ -20,11 +20,17 @@ Ordre de déploiement (gestion des dépendances entre scripts) :
      (bronze avant silver avant gold), car une dépendance entre zones va
      presque toujours dans ce sens.
   2. Au sein d'une même zone, tri alphabétique par défaut.
-  3. Si un fichier deploy_order.txt est présent à la racine du repo (un
-     chemin de script par ligne, relatif à la racine), il prime sur les
-     deux règles précédentes pour les fichiers qu'il liste : à utiliser
-     pour les cas particuliers où deux scripts de la même zone dépendent
-     l'un de l'autre dans un ordre non alphabétique.
+  3. Si un script dépend d'un autre script modifié dans la MÊME PR (cas
+     plus rare, ex. deux scripts de la même zone), le déclarer dans son
+     propre en-tête avec un commentaire :
+         --DEPLOY_AFTER: sql/slv/autre_script.sql
+     (plusieurs chemins possibles, séparés par des virgules). Ce choix -
+     une déclaration dans le fichier qui en a besoin, plutôt qu'un fichier
+     manifeste partagé à la racine du repo - évite les conflits Git entre
+     PR concurrentes qui auraient sinon dû modifier le même fichier.
+     Une dépendance vers un script déjà déployé par une PR précédente
+     n'a pas besoin d'être déclarée : elle n'apparaît pas dans la liste
+     des fichiers modifiés de la PR courante, donc n'affecte pas le tri.
 
 Usage: python deploy_snowflake.py fichier1.sql fichier2.sql ...
 """
@@ -45,7 +51,7 @@ ALLOWED_ENVS = {"PPR", "PRD"}
 # Ordre de déploiement des zones, de la source vers les couches dérivées.
 LAYER_ORDER = ["brz", "slv", "gld"]
 
-DEPLOY_ORDER_FILE = "deploy_order.txt"
+DEPLOY_AFTER_PATTERN = re.compile(r"--\s*DEPLOY_AFTER\s*:\s*(.+)", re.IGNORECASE)
 
 
 def zone_of(path: str) -> str | None:
@@ -56,29 +62,47 @@ def zone_of(path: str) -> str | None:
     return None
 
 
+def base_sort_key(path: str) -> tuple[int, str]:
+    zone = zone_of(path)
+    rank = LAYER_ORDER.index(zone) if zone in LAYER_ORDER else len(LAYER_ORDER)
+    return (rank, path)
+
+
+def read_deploy_after(file_path: str) -> list[str]:
+    """Lit les dépendances --DEPLOY_AFTER: déclarées dans l'en-tête du fichier."""
+    text = Path(file_path).read_text(encoding="utf-8")
+    deps: list[str] = []
+    for match in DEPLOY_AFTER_PATTERN.finditer(text):
+        deps += [p.strip() for p in match.group(1).split(",") if p.strip()]
+    return deps
+
+
 def sort_deployment_order(files: list[str]) -> list[str]:
-    """Trie les fichiers à déployer : zone (brz < slv < gld) puis alpha,
-    sauf override explicite via deploy_order.txt."""
-    override = Path(DEPLOY_ORDER_FILE)
-    if override.exists():
-        ordered = [
-            line.strip() for line in override.read_text(encoding="utf-8").splitlines()
-            if line.strip() and line.strip() in files
-        ]
-        remaining = sorted(f for f in files if f not in ordered)
-        if ordered:
-            print(f"Ordre de déploiement défini par {DEPLOY_ORDER_FILE} pour {len(ordered)} fichier(s).")
-        return ordered + remaining
+    """Tri topologique : respecte les dépendances --DEPLOY_AFTER: déclarées
+    dans chaque fichier, puis départage par zone (brz < slv < gld) et ordre
+    alphabétique. Une dépendance pointant vers un fichier absent de `files`
+    est ignorée (le script dépendant est déjà déployé, hors de cette PR)."""
+    files_set = set(files)
+    deps: dict[str, set[str]] = {
+        f: {d for d in read_deploy_after(f) if d in files_set and d != f}
+        for f in files
+    }
 
-    def sort_key(path: str) -> tuple[int, str]:
-        zone = zone_of(path)
-        try:
-            rank = LAYER_ORDER.index(zone) if zone else len(LAYER_ORDER)
-        except ValueError:
-            rank = len(LAYER_ORDER)
-        return (rank, path)
+    ordered: list[str] = []
+    remaining = set(files)
+    while remaining:
+        ready = sorted(
+            (f for f in remaining if deps[f] <= set(ordered)),
+            key=base_sort_key,
+        )
+        if not ready:
+            cycle = ", ".join(sorted(remaining))
+            raise ValueError(f"Dépendance DEPLOY_AFTER circulaire ou invalide entre : {cycle}")
+        picked = ready[0]
+        ordered.append(picked)
+        remaining.discard(picked)
 
-    return sorted(files, key=sort_key)
+    return ordered
 
 
 def load_private_key(pem: str, passphrase: str | None) -> bytes:
