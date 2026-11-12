@@ -37,11 +37,14 @@ jobs:
         id: changed
         run: |
           git fetch origin ${{ github.base_ref }} --depth=1
-          files=$(git diff --name-only origin/${{ github.base_ref }}...HEAD -- 'sql/**/*.sql')
-          echo "files<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$files" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
-          echo "$files"
+          # git diff renvoie un fichier par ligne ; on les joint par des
+          # espaces pour obtenir UNE seule ligne, sans quoi chaque fichier
+          # supplémentaire serait injecté comme une commande shell séparée
+          # dans l'étape qui consomme cette sortie (cf. incident constaté :
+          # "sql/xxx.sql: Permission denied", exit code 126).
+          files=$(git diff --name-only origin/${{ github.base_ref }}...HEAD -- 'sql/**/*.sql' | tr '\n' ' ')
+          echo "files=$files" >> "$GITHUB_OUTPUT"
+          echo "Fichiers modifiés : $files"
 
       - name: Lint
         if: steps.changed.outputs.files != ''
@@ -69,10 +72,9 @@ jobs:
         id: changed
         run: |
           git fetch origin ${{ github.base_ref }} --depth=1
-          files=$(git diff --name-only origin/${{ github.base_ref }}...HEAD -- 'sql/**/*.sql')
-          echo "files<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$files" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          files=$(git diff --name-only origin/${{ github.base_ref }}...HEAD -- 'sql/**/*.sql' | tr '\n' ' ')
+          echo "files=$files" >> "$GITHUB_OUTPUT"
+          echo "Fichiers modifiés : $files"
 
       - name: Déploiement sur Snowflake PREPROD
         if: steps.changed.outputs.files != ''
@@ -108,10 +110,9 @@ jobs:
         id: changed
         run: |
           git fetch origin ${{ github.base_ref }} --depth=1
-          files=$(git diff --name-only origin/${{ github.base_ref }}...HEAD -- 'sql/**/*.sql')
-          echo "files<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$files" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          files=$(git diff --name-only origin/${{ github.base_ref }}...HEAD -- 'sql/**/*.sql' | tr '\n' ' ')
+          echo "files=$files" >> "$GITHUB_OUTPUT"
+          echo "Fichiers modifiés : $files"
 
       - name: Déploiement sur Snowflake PROD
         if: steps.changed.outputs.files != ''
