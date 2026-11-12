@@ -14,6 +14,18 @@ Variables d'environnement attendues :
   SNOWFLAKE_PRIVATE_KEY_PASSPHRASE (optionnel), SNOWFLAKE_ROLE,
   SNOWFLAKE_WAREHOUSE, TARGET_ENV (PPR ou PRD)
 
+Ordre de déploiement (gestion des dépendances entre scripts) :
+  1. Les fichiers sont d'abord regroupés par zone (dossier sql/<zone>/...)
+     et déployés zone par zone dans l'ordre LAYER_ORDER ci-dessous
+     (bronze avant silver avant gold), car une dépendance entre zones va
+     presque toujours dans ce sens.
+  2. Au sein d'une même zone, tri alphabétique par défaut.
+  3. Si un fichier deploy_order.txt est présent à la racine du repo (un
+     chemin de script par ligne, relatif à la racine), il prime sur les
+     deux règles précédentes pour les fichiers qu'il liste : à utiliser
+     pour les cas particuliers où deux scripts de la même zone dépendent
+     l'un de l'autre dans un ordre non alphabétique.
+
 Usage: python deploy_snowflake.py fichier1.sql fichier2.sql ...
 """
 import os
@@ -22,11 +34,51 @@ import sys
 
 sys.stdout.reconfigure(encoding="utf-8")
 
+from pathlib import Path
+
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 import snowflake.connector
 
 ALLOWED_ENVS = {"PPR", "PRD"}
+
+# Ordre de déploiement des zones, de la source vers les couches dérivées.
+LAYER_ORDER = ["brz", "slv", "gld"]
+
+DEPLOY_ORDER_FILE = "deploy_order.txt"
+
+
+def zone_of(path: str) -> str | None:
+    """Extrait le nom de zone depuis sql/<zone>/... (insensible à la casse)."""
+    parts = Path(path).parts
+    if len(parts) >= 2 and parts[0].lower() == "sql":
+        return parts[1].lower()
+    return None
+
+
+def sort_deployment_order(files: list[str]) -> list[str]:
+    """Trie les fichiers à déployer : zone (brz < slv < gld) puis alpha,
+    sauf override explicite via deploy_order.txt."""
+    override = Path(DEPLOY_ORDER_FILE)
+    if override.exists():
+        ordered = [
+            line.strip() for line in override.read_text(encoding="utf-8").splitlines()
+            if line.strip() and line.strip() in files
+        ]
+        remaining = sorted(f for f in files if f not in ordered)
+        if ordered:
+            print(f"Ordre de déploiement défini par {DEPLOY_ORDER_FILE} pour {len(ordered)} fichier(s).")
+        return ordered + remaining
+
+    def sort_key(path: str) -> tuple[int, str]:
+        zone = zone_of(path)
+        try:
+            rank = LAYER_ORDER.index(zone) if zone else len(LAYER_ORDER)
+        except ValueError:
+            rank = len(LAYER_ORDER)
+        return (rank, path)
+
+    return sorted(files, key=sort_key)
 
 
 def load_private_key(pem: str, passphrase: str | None) -> bytes:
@@ -76,6 +128,11 @@ def main(argv: list[str]) -> int:
     if not files:
         print("Aucun fichier SQL à déployer.")
         return 0
+
+    files = sort_deployment_order(files)
+    print("Ordre de déploiement retenu :")
+    for f in files:
+        print(f"  - {f}")
 
     conn = connect()
     try:

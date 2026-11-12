@@ -8,6 +8,8 @@ Vérifie les bonnes pratiques attendues par l'équipe Manitowoc :
   - présence d'un bloc DECLARE ... vEnv ... pour piloter l'environnement
   - présence d'un en-tête de commentaire (Auteur / Date / Description)
   - pas de mot de passe ou de clé en clair dans le script
+  - fichier rangé sous sql/<brz|slv|gld>/... (ordonnancement des
+    dépendances entre scripts lors du déploiement, voir README section 5)
 
 Usage: python lint_sql.py fichier1.sql fichier2.sql ...
 Exit code != 0 si au moins un fichier contient une violation bloquante.
@@ -18,6 +20,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8")
+
+VALID_ZONES = {"brz", "slv", "gld"}
 
 
 @dataclass
@@ -102,6 +106,20 @@ def check_secrets(raw: str, path: str) -> list[Violation]:
     return violations
 
 
+def check_zone_folder(path: str) -> list[Violation]:
+    parts = Path(path).parts
+    violations = []
+    if len(parts) < 3 or parts[0].lower() != "sql" or parts[1].lower() not in VALID_ZONES:
+        violations.append(
+            Violation(
+                path, 1, "require-zone-folder",
+                "Le script doit être rangé sous sql/brz/, sql/slv/ ou sql/gld/ "
+                "pour que le déploiement respecte l'ordre des dépendances entre zones.",
+            )
+        )
+    return violations
+
+
 def lint_file(path: str) -> list[Violation]:
     raw = Path(path).read_text(encoding="utf-8")
     clean = strip_comments(raw)
@@ -111,6 +129,7 @@ def lint_file(path: str) -> list[Violation]:
     violations += check_hardcoded_db(clean, path)
     violations += check_header_comment(raw, path)
     violations += check_secrets(raw, path)
+    violations += check_zone_folder(path)
     return violations
 
 
