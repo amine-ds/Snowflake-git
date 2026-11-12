@@ -260,7 +260,7 @@ def main(argv: list[str]) -> int:
 
     log(f"❌ {len(all_violations)} violation(s) détectée(s) sur {len({v.file for v in all_violations})} fichier(s) :")
     for v in all_violations:
-        log(f"  cause : {v.file}:{v.line} [{v.rule}] {v.message}")
+        log(f"  ERREUR [{v.rule}] {v.file}:{v.line} → {v.message}")
         annotate(v)
 
     summary_rows = "\n".join(
