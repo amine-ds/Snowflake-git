@@ -129,6 +129,8 @@ Bloque la PR si un fichier `.sql` modifié contient :
   variable, jamais codé en dur dans les `FROM`/`JOIN`)
 - un nom de base/schéma en dur du type `PRD_...` ou `PPR_...` ailleurs que
   dans la déclaration de variable
+- un warehouse (`WAREHOUSE = ...`) dont le nom n'est pas préfixé par un
+  code d'environnement valide (`PRD_...` / `PPR_...`) — voir section 5
 - pas d'en-tête de commentaire (Auteur / Date / Description)
 - un mot de passe ou une clé privée écrits en clair dans le script
 
@@ -147,6 +149,17 @@ la livraison. Pour éviter une erreur humaine (oubli de repasser la valeur
 fonction du job qui l'exécute (`PPR` pour le job preprod, `PRD` pour le
 job prod), quelle que soit la valeur présente dans le fichier. Le
 développeur n'a donc plus besoin d'y toucher.
+
+**Même principe pour les warehouses.** Les tables dynamiques et les tasks
+référencent leur warehouse en dur (`WAREHOUSE = PRD_TRF_TRAFIC_WH` par
+exemple) : contrairement à `vDatabase`, cette clause n'accepte pas une
+variable de session en DDL, donc le nom reste toujours écrit en clair dans
+le script. Le déploiement repère chaque préfixe d'environnement
+(`PRD_`/`PPR_`) dans une clause `WAREHOUSE = ...` et le réécrit pour
+correspondre au job en cours, sur le même principe que `vEnv` — qu'il y en
+ait un ou plusieurs dans le fichier (table dynamique, task...). Le lint
+impose en contrepartie que tout warehouse référencé porte bien ce préfixe,
+sans quoi la réécriture ne saurait pas quoi faire.
 
 Chaque fichier `.sql` modifié par la PR est envoyé à Snowflake en une
 seule requête (`cur.execute`), car vos scripts sont des blocs anonymes

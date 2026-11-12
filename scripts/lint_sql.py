@@ -5,6 +5,10 @@ Vérifie les bonnes pratiques attendues par l'équipe Manitowoc :
   - pas de SELECT * (hors COUNT(*))
   - utilisation de variables de session pour l'environnement / la base cible,
     pas de nom de base en dur (PRD_xxx / PPR_xxx)
+  - les warehouses (WAREHOUSE = ...), qui ne peuvent pas être pilotés par
+    variable en DDL, doivent au moins être préfixés par un code
+    d'environnement valide (PRD_.../PPR_...) pour que le déploiement
+    puisse le remplacer automatiquement par le bon environnement
   - présence d'un bloc DECLARE ... vEnv ... pour piloter l'environnement
   - présence d'un en-tête de commentaire (Auteur / Date / Description)
   - pas de mot de passe ou de clé en clair dans le script
@@ -23,6 +27,11 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8")
 
 VALID_ZONES = {"brz", "slv", "gld"}
+
+# Doit rester aligné avec ALLOWED_ENVS dans deploy_snowflake.py.
+ALLOWED_ENVS = {"PRD", "PPR"}
+
+WAREHOUSE_PATTERN = re.compile(r"\bWAREHOUSE\s*=\s*([A-Za-z0-9_:]+)", re.IGNORECASE)
 
 
 @dataclass
@@ -67,9 +76,15 @@ def check_env_variable(sql_no_comments: str, path: str) -> list[Violation]:
 
 
 def check_hardcoded_db(sql_no_comments: str, path: str) -> list[Violation]:
+    """Détecte un nom de base/schéma en dur (PRD_xxx / PPR_xxx), sauf dans
+    une clause WAREHOUSE = ... (gérée séparément : voir check_warehouse_env_prefix,
+    car on ne peut pas y mettre une variable de session en DDL)."""
     violations = []
     for i, line in enumerate(sql_no_comments.splitlines(), start=1):
+        warehouse_spans = [m.span(1) for m in WAREHOUSE_PATTERN.finditer(line)]
         for m in re.finditer(r"\b(PRD|PPR)_[A-Z0-9_]+\b", line):
+            if any(start <= m.start() < end for start, end in warehouse_spans):
+                continue
             violations.append(
                 Violation(
                     path, i, "no-hardcoded-database",
@@ -77,6 +92,30 @@ def check_hardcoded_db(sql_no_comments: str, path: str) -> list[Violation]:
                     "utiliser les variables vDatabase/vEnv au lieu d'un littéral.",
                 )
             )
+    return violations
+
+
+def check_warehouse_env_prefix(sql_no_comments: str, path: str) -> list[Violation]:
+    """Un warehouse référencé en dur (WAREHOUSE = ...) doit être préfixé par
+    un code d'environnement valide pour que le déploiement puisse le
+    remplacer automatiquement (voir force_target_warehouse_env)."""
+    violations = []
+    envs = "|".join(ALLOWED_ENVS)
+    valid_prefix = re.compile(rf"^(?:{envs})_", re.IGNORECASE)
+    for i, line in enumerate(sql_no_comments.splitlines(), start=1):
+        for m in WAREHOUSE_PATTERN.finditer(line):
+            token = m.group(1)
+            if token.startswith(":"):
+                continue  # variable de session, rien à vérifier
+            if not valid_prefix.match(token):
+                violations.append(
+                    Violation(
+                        path, i, "warehouse-missing-env-prefix",
+                        f"Warehouse '{token}' sans préfixe d'environnement reconnu "
+                        f"({'/'.join(sorted(ALLOWED_ENVS))}_...) : le déploiement ne "
+                        "pourra pas le faire pointer vers le bon environnement.",
+                    )
+                )
     return violations
 
 
@@ -152,6 +191,7 @@ def lint_file(path: str) -> list[Violation]:
     violations += check_select_star(raw, path)
     violations += check_env_variable(clean, path)
     violations += check_hardcoded_db(clean, path)
+    violations += check_warehouse_env_prefix(clean, path)
     violations += check_header_comment(raw, path)
     violations += check_secrets(raw, path)
     violations += check_zone_folder(path)

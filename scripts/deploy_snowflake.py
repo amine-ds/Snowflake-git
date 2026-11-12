@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Déploie des scripts SQL Snowflake (blocs anonymes DECLARE/BEGIN/END) sur
-l'environnement cible, en forçant la variable vEnv du script pour éviter
-toute erreur humaine (oubli de repasser le script en PRD avant merge, etc.).
+l'environnement cible, en forçant la variable vEnv du script, ainsi que le
+préfixe d'environnement de tout warehouse référencé en dur (tables
+dynamiques, tasks...), pour éviter toute erreur humaine (oubli de repasser
+le script en PRD avant merge, warehouse resté sur le mauvais environnement,
+etc.).
 
 Chaque fichier .sql est envoyé tel quel en UNE seule instruction : les scripts
 du client sont des blocs anonymes (DECLARE ... BEGIN ... END;) qui doivent
@@ -128,6 +131,24 @@ def force_target_env(sql: str, target_env: str) -> str:
     return new_sql
 
 
+# WAREHOUSE = <ENV>_<nom>, utilisé par ex. par les tables dynamiques
+# (WAREHOUSE = ...) et les tasks (WAREHOUSE = ...). Ces clauses attendent un
+# identifiant littéral : on ne peut pas y mettre une variable de session
+# (:vWarehouse), contrairement à vDatabase. On réécrit donc directement le
+# préfixe d'environnement, comme pour vEnv, quel que soit celui laissé dans
+# le fichier par le développeur.
+WAREHOUSE_PATTERN = re.compile(
+    r"(\bWAREHOUSE\s*=\s*)(" + "|".join(ALLOWED_ENVS) + r")(_[A-Za-z0-9_]*)",
+    re.IGNORECASE,
+)
+
+
+def force_target_warehouse_env(sql: str, target_env: str) -> str:
+    """Réécrit le préfixe d'environnement de chaque warehouse référencé
+    dans une clause WAREHOUSE = ..., en préservant le reste du nom."""
+    return WAREHOUSE_PATTERN.sub(rf"\1{target_env}\3", sql)
+
+
 def connect() -> snowflake.connector.SnowflakeConnection:
     private_key_der = load_private_key(
         os.environ["SNOWFLAKE_PRIVATE_KEY"],
@@ -166,6 +187,7 @@ def main(argv: list[str]) -> int:
                 sql = fh.read()
 
             sql = force_target_env(sql, target_env)
+            sql = force_target_warehouse_env(sql, target_env)
 
             print(f"--- Déploiement de {file_path} sur {target_env} ---")
             cur.execute(sql)
