@@ -32,7 +32,7 @@ PR ouverte / mise à jour (sql/**/*.sql)
 
 ```
 sql/                         scripts SQL à déployer (un fichier = un bloc
-                             anonyme DECLARE/BEGIN/END, comme vos exemples)
+                             anonyme DECLARE/BEGIN/END)
   brz/                       scripts touchant la zone bronze
   slv/                       scripts touchant la zone silver
   gld/                       scripts touchant la zone gold
@@ -56,23 +56,25 @@ Créer deux users Snowflake dédiés à la CI, authentifiés par **clé RSA**
 CREATE USER SVC_CICD_PREPROD
   RSA_PUBLIC_KEY = '<clé publique PEM>'
   DEFAULT_ROLE = ROLE_CICD_PREPROD
-  DEFAULT_WAREHOUSE = PPR_TRF_TRAFIC_WH
+  DEFAULT_WAREHOUSE = <NOM_WAREHOUSE_PREPROD>
   MUST_CHANGE_PASSWORD = FALSE;
 
 CREATE ROLE ROLE_CICD_PREPROD;
-GRANT USAGE ON WAREHOUSE PPR_TRF_TRAFIC_WH TO ROLE ROLE_CICD_PREPROD;
-GRANT ALL ON DATABASE PPR_SLV TO ROLE ROLE_CICD_PREPROD;  -- à affiner selon vos zones
+GRANT USAGE ON WAREHOUSE <NOM_WAREHOUSE_PREPROD> TO ROLE ROLE_CICD_PREPROD;
+GRANT ALL ON DATABASE PPR_<ZONE> TO ROLE ROLE_CICD_PREPROD;  -- une ligne par zone (brz/slv/gld) à autoriser
 GRANT ROLE ROLE_CICD_PREPROD TO USER SVC_CICD_PREPROD;
 
 -- Compte PROD : accès uniquement aux bases PRD_*
 CREATE USER SVC_CICD_PROD
   RSA_PUBLIC_KEY = '<clé publique PEM>'
   DEFAULT_ROLE = ROLE_CICD_PROD
+  DEFAULT_WAREHOUSE = <NOM_WAREHOUSE_PROD>
   MUST_CHANGE_PASSWORD = FALSE;
 
 CREATE ROLE ROLE_CICD_PROD;
-GRANT USAGE ON WAREHOUSE ............ TO ROLE ROLE_CICD_PROD;
-
+GRANT USAGE ON WAREHOUSE <NOM_WAREHOUSE_PROD> TO ROLE ROLE_CICD_PROD;
+GRANT ALL ON DATABASE PRD_<ZONE> TO ROLE ROLE_CICD_PROD;  -- une ligne par zone (brz/slv/gld) à autoriser
+GRANT ROLE ROLE_CICD_PROD TO USER SVC_CICD_PROD;
 ```
 
 Génération de la paire de clés (à faire une fois, en local, jamais commitée) :
@@ -180,7 +182,7 @@ déjà en base) n'a pas besoin d'être déclarée : seules les dépendances
 
 - **Rollback** : ces scripts sont `CREATE OR REPLACE` / `UPDATE`, donc pas
   de rollback automatique. À minima, consigner le lien du run GitHub
-  Actions dans le ticket ORUS associé.
+  Actions dans le ticket associé.
 - **Merge** : la pipeline déploie **avant** le merge (sur la PR). Décider
   si le merge dans `main` se fait automatiquement après succès du job
   `deploy-prod`, ou reste manuel.
