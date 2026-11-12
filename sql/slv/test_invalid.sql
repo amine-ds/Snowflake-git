@@ -1,5 +1,0 @@
-DECLARE
-    vEnv varchar := 'PRD';
-BEGIN
-    SELECT * FROM PRD_SLV.TEST_SCHEMA.TEST_TABLE;
-END;
