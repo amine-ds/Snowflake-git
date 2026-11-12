@@ -19,12 +19,41 @@ Vérifie les bonnes pratiques attendues par l'équipe Manitowoc :
 Usage: python lint_sql.py fichier1.sql fichier2.sql ...
 Exit code != 0 si au moins un fichier contient une violation bloquante.
 """
+import os
 import re
 import sys
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8")
+
+
+def log(message: str) -> None:
+    """Log horodaté, pour pouvoir situer dans le temps une erreur dans les
+    logs du job GitHub Actions (utile quand plusieurs fichiers sont lintés)."""
+    ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+    print(f"[{ts}] {message}")
+
+
+def annotate(violation: "Violation") -> None:
+    """Émet une annotation GitHub Actions (::error::) pour que la violation
+    s'affiche directement sur la ligne concernée dans l'onglet 'Files
+    changed' de la PR, en plus du log texte habituel."""
+    print(
+        f"::error file={violation.file},line={violation.line},title=lint:{violation.rule}::{violation.message}"
+    )
+
+
+def write_step_summary(markdown: str) -> None:
+    """Ajoute `markdown` au résumé du job (visible dans l'onglet Summary du
+    run GitHub Actions). No-op si GITHUB_STEP_SUMMARY n'est pas défini
+    (ex. exécution locale, hors CI)."""
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not summary_path:
+        return
+    with open(summary_path, "a", encoding="utf-8") as fh:
+        fh.write(markdown)
 
 VALID_ZONES = {"brz", "slv", "gld"}
 
@@ -185,7 +214,12 @@ def check_zone_folder(path: str) -> list[Violation]:
 
 
 def lint_file(path: str) -> list[Violation]:
-    raw = Path(path).read_text(encoding="utf-8")
+    try:
+        raw = Path(path).read_text(encoding="utf-8")
+    except OSError as exc:
+        log(f"❌ Impossible de lire {path} : {exc.__class__.__name__}: {exc}")
+        return [Violation(path, 1, "unreadable-file", f"Fichier illisible ({exc.__class__.__name__}: {exc}).")]
+
     clean = strip_comments(raw)
     violations: list[Violation] = []
     violations += check_select_star(raw, path)
@@ -196,27 +230,49 @@ def lint_file(path: str) -> list[Violation]:
     violations += check_secrets(raw, path)
     violations += check_zone_folder(path)
     violations += check_deploy_after(raw, path)
+
+    if violations:
+        log(f"❌ {path} : {len(violations)} violation(s)")
+    else:
+        log(f"✅ {path} : OK")
     return violations
 
 
 def main(argv: list[str]) -> int:
-    if not argv:
-        print("Aucun fichier SQL à analyser.")
+    files = [f for f in argv if f.strip()]
+    if not files:
+        log("Aucun fichier SQL à analyser.")
         return 0
 
+    log(f"Lint de {len(files)} fichier(s) : {', '.join(files)}")
+
     all_violations: list[Violation] = []
-    for file_path in argv:
-        if not file_path.strip():
-            continue
+    for file_path in files:
         all_violations += lint_file(file_path)
 
     if not all_violations:
-        print(f"✅ Lint OK sur {len(argv)} fichier(s).")
+        log(f"✅ Lint OK sur {len(files)} fichier(s).")
+        write_step_summary(
+            f"### Lint SQL\n\n✅ {len(files)} fichier(s) analysé(s), aucune violation.\n\n"
+            + "\n".join(f"- `{f}`" for f in files) + "\n"
+        )
         return 0
 
-    print(f"❌ {len(all_violations)} violation(s) détectée(s) :\n")
+    log(f"❌ {len(all_violations)} violation(s) détectée(s) sur {len({v.file for v in all_violations})} fichier(s) :")
     for v in all_violations:
-        print(f"  {v.file}:{v.line} [{v.rule}] {v.message}")
+        log(f"  cause : {v.file}:{v.line} [{v.rule}] {v.message}")
+        annotate(v)
+
+    summary_rows = "\n".join(
+        f"| `{v.file}` | {v.line} | `{v.rule}` | {v.message} |" for v in all_violations
+    )
+    write_step_summary(
+        "### Lint SQL\n\n"
+        f"❌ {len(all_violations)} violation(s) sur {len(files)} fichier(s) analysé(s).\n\n"
+        "| Fichier | Ligne | Règle | Cause |\n"
+        "|---|---|---|---|\n"
+        f"{summary_rows}\n"
+    )
 
     blocking = [v for v in all_violations if v.blocking]
     return 1 if blocking else 0
