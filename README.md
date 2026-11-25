@@ -38,6 +38,13 @@ PRD ──(create branch TICKET-123)──> TICKET-123
 Comme auparavant, le déploiement a lieu **avant** le merge (sur la PR
 elle-même) : attendez que la PR passe au vert avant de la merger.
 
+**Après un déploiement réussi**, le workflow committe automatiquement sur
+la branche de la PR la valeur réellement déployée (`vEnv`, warehouse) dans
+le(s) fichier(s) concerné(s) — sinon le fichier garderait pour toujours ce
+que vous avez écrit (ex. `vEnv='DEV'`), même après un déploiement prod
+réussi. Un nouveau `git pull` sur votre branche de ticket après un run vert
+vous montrera donc l'état réellement déployé.
+
 ## 2. Arborescence attendue
 
 ```
