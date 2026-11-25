@@ -66,10 +66,11 @@ Chaque fichier `.sql` est un bloc anonyme Snowflake Scripting
   dans la déclaration de la variable `vEnv`).
 - Un warehouse référencé en dur (`WAREHOUSE = ...`, utilisé par les tables
   dynamiques et les tasks — cette clause n'accepte pas de variable de
-  session) doit être préfixé par un code d'environnement reconnu
-  (`DEV_.../QUA_.../PRD_...`) : il sera lui aussi réécrit automatiquement
-  au déploiement. (C'est la seule convention où l'environnement reste un
-  *préfixe*, par nom de warehouse — pas un nom de base.)
+  session) suit une convention différente : un warehouse non-prod est
+  préfixé `NP_` (ex. `NP_COMPUTE_WH`, partagé par DEV et QUA), le même
+  warehouse en prod n'a **pas** de préfixe (`COMPUTE_WH`). Le déploiement
+  ajoute ou retire ce préfixe `NP_` automatiquement selon la cible — aucune
+  contrainte du lint sur le nom lui-même, préfixé ou non dans le fichier.
 - Un en-tête de commentaire (bloc `/* ... Auteur / Date / Description ... */`).
 - Pas de mot de passe ni de clé privée en clair dans le script.
 
