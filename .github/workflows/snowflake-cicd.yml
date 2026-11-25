@@ -1,13 +1,19 @@
-name: Snowflake CI/CD
+name: Snowflake CI/CD (caller)
 
-# Se déclenche dès qu'une Pull Request est ouverte ou mise à jour vers main.
-# Le job "lint" tourne automatiquement. Les jobs de déploiement sont bloqués
-# par les règles de protection des GitHub Environments "preprod" et "prod"
-# (reviewers obligatoires = équipe Snowflake admin), configurées dans
-# Settings > Environments du repo (voir README.md).
+# Workflow "appelant" : la logique de lint + déploiement vit dans le dépôt
+# amine-ds/snowflake-admin (workflow réutilisable), invoquée ici à chaque PR
+# vers QUAL ou PRD. Voir le README de snowflake-admin pour le détail complet
+# de l'architecture, le modèle de promotion par branches, et la mise en
+# place des Environments GitHub (qui vivent dans snowflake-admin, pas ici).
+#
+# Rappel du modèle : une branche de ticket est créée depuis PRD, mergée
+# dans DEV (aucune pipeline), puis une PR vers QUAL (lint + déploiement
+# auto sur QUA), puis une PR vers PRD (lint + déploiement sur PRD, avec
+# validation manuelle).
+
 on:
   pull_request:
-    branches: [main]
+    branches: [QUAL, PRD]
     types: [opened, synchronize, reopened]
     paths:
       - "sql/**/*.sql"
@@ -21,108 +27,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  lint:
-    name: Lint SQL
+  determine-target:
+    name: Déterminer l'environnement cible
     runs-on: ubuntu-latest
+    outputs:
+      target_env: ${{ steps.set.outputs.target_env }}
+      environment_name: ${{ steps.set.outputs.environment_name }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Lister les fichiers SQL modifiés
-        id: changed
+      - id: set
         run: |
-          git fetch origin ${{ github.base_ref }} --depth=1
-          # git diff renvoie un fichier par ligne ; on les joint par des
-          # espaces pour obtenir UNE seule ligne, sans quoi chaque fichier
-          # supplémentaire serait injecté comme une commande shell séparée
-          # dans l'étape qui consomme cette sortie (cf. incident constaté :
-          # "sql/xxx.sql: Permission denied", exit code 126).
-          files=$(git diff --name-only origin/${{ github.base_ref }}...HEAD -- 'sql/**/*.sql' | tr '\n' ' ')
-          echo "files=$files" >> "$GITHUB_OUTPUT"
-          echo "Fichiers modifiés : $files"
+          if [ "${{ github.base_ref }}" = "PRD" ]; then
+            echo "target_env=PRD" >> "$GITHUB_OUTPUT"
+            echo "environment_name=prod" >> "$GITHUB_OUTPUT"
+          else
+            echo "target_env=QUA" >> "$GITHUB_OUTPUT"
+            echo "environment_name=qual" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Lint
-        if: steps.changed.outputs.files != ''
-        run: |
-          python scripts/lint_sql.py ${{ steps.changed.outputs.files }}
-
-  deploy-preprod:
-    name: Déploiement PREPROD (validation Snowflake admin requise)
-    needs: lint
-    runs-on: ubuntu-latest
-    environment: preprod
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Installer les dépendances
-        run: pip install -r scripts/requirements.txt
-
-      - name: Lister les fichiers SQL modifiés
-        id: changed
-        run: |
-          git fetch origin ${{ github.base_ref }} --depth=1
-          files=$(git diff --name-only origin/${{ github.base_ref }}...HEAD -- 'sql/**/*.sql' | tr '\n' ' ')
-          echo "files=$files" >> "$GITHUB_OUTPUT"
-          echo "Fichiers modifiés : $files"
-
-      - name: Déploiement sur Snowflake PREPROD
-        if: steps.changed.outputs.files != ''
-        env:
-          SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
-          SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
-          SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SNOWFLAKE_PRIVATE_KEY }}
-          SNOWFLAKE_PRIVATE_KEY_PASSPHRASE: ${{ secrets.SNOWFLAKE_PRIVATE_KEY_PASSPHRASE }}
-          SNOWFLAKE_ROLE: ${{ secrets.SNOWFLAKE_ROLE }}
-          SNOWFLAKE_WAREHOUSE: ${{ secrets.SNOWFLAKE_WAREHOUSE }}
-          TARGET_ENV: PPR
-        run: |
-          python scripts/deploy_snowflake.py ${{ steps.changed.outputs.files }}
-
-  deploy-prod:
-    name: Déploiement PROD (validation Snowflake admin requise)
-    needs: deploy-preprod
-    runs-on: ubuntu-latest
-    environment: prod
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Installer les dépendances
-        run: pip install -r scripts/requirements.txt
-
-      - name: Lister les fichiers SQL modifiés
-        id: changed
-        run: |
-          git fetch origin ${{ github.base_ref }} --depth=1
-          files=$(git diff --name-only origin/${{ github.base_ref }}...HEAD -- 'sql/**/*.sql' | tr '\n' ' ')
-          echo "files=$files" >> "$GITHUB_OUTPUT"
-          echo "Fichiers modifiés : $files"
-
-      - name: Déploiement sur Snowflake PROD
-        if: steps.changed.outputs.files != ''
-        env:
-          SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
-          SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
-          SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SNOWFLAKE_PRIVATE_KEY }}
-          SNOWFLAKE_PRIVATE_KEY_PASSPHRASE: ${{ secrets.SNOWFLAKE_PRIVATE_KEY_PASSPHRASE }}
-          SNOWFLAKE_ROLE: ${{ secrets.SNOWFLAKE_ROLE }}
-          SNOWFLAKE_WAREHOUSE: ${{ secrets.SNOWFLAKE_WAREHOUSE }}
-          TARGET_ENV: PRD
-        run: |
-          python scripts/deploy_snowflake.py ${{ steps.changed.outputs.files }}
+  deploy:
+    name: Lint + déploiement (snowflake-admin)
+    needs: determine-target
+    uses: amine-ds/snowflake-admin/.github/workflows/snowflake-deploy.yml@main
+    with:
+      target_env: ${{ needs.determine-target.outputs.target_env }}
+      environment_name: ${{ needs.determine-target.outputs.environment_name }}
