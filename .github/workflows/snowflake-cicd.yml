@@ -74,6 +74,7 @@ jobs:
       - name: Lister les fichiers SQL modifiés
         id: changed
         run: |
+          set -o pipefail
           git fetch origin ${{ github.base_ref }}
           files=$(git diff --name-only origin/${{ github.base_ref }}...HEAD -- 'sql/**/*.sql' | tr '\n' ' ')
           echo "files=$files" >> "$GITHUB_OUTPUT"
@@ -111,9 +112,11 @@ jobs:
       - name: Lister les fichiers SQL modifiés
         id: changed
         run: |
+          set -o pipefail
           git fetch origin ${{ github.base_ref }}
           files=$(git diff --name-only origin/${{ github.base_ref }}...HEAD -- 'sql/**/*.sql' | tr '\n' ' ')
           echo "files=$files" >> "$GITHUB_OUTPUT"
+          echo "Fichiers modifiés : $files"
 
       - name: Déploiement sur Snowflake
         if: steps.changed.outputs.files != ''
