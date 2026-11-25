@@ -53,6 +53,16 @@ import snowflake.connector
 
 ALLOWED_ENVS = {"PPR", "PRD"}
 
+ENVIRONMENT_NAME = {"PPR": "preprod", "PRD": "prod"}
+
+REQUIRED_SECRETS = [
+    "SNOWFLAKE_ACCOUNT",
+    "SNOWFLAKE_USER",
+    "SNOWFLAKE_PRIVATE_KEY",
+    "SNOWFLAKE_ROLE",
+    "SNOWFLAKE_WAREHOUSE",
+]
+
 
 def log(message: str) -> None:
     """Log horodaté : utile pour situer où un déploiement multi-fichiers a
@@ -206,6 +216,23 @@ def main(argv: list[str]) -> int:
         print(f"::error::TARGET_ENV invalide ou absent : '{target_env}' (attendu PPR ou PRD).")
         return 1
 
+    missing_secrets = [name for name in REQUIRED_SECRETS if not os.environ.get(name)]
+    if missing_secrets:
+        names = ", ".join(missing_secrets)
+        env_name = ENVIRONMENT_NAME[target_env]
+        log(f"❌ Secret(s) manquant(s) pour l'environnement {target_env} : {names}")
+        print(
+            f"::error title=Secrets manquants::L'Environment GitHub '{env_name}' n'a pas "
+            f"(encore) ces secrets configurés : {names}. Voir README.md section 3.1 "
+            "(Environment secrets)."
+        )
+        write_step_summary(
+            f"### Déploiement {target_env}\n\n"
+            f"❌ Secret(s) manquant(s) : {names}\n\n"
+            f"À configurer dans Settings > Environments > {env_name} > Environment secrets.\n"
+        )
+        return 1
+
     files = [f for f in argv if f.strip()]
     if not files:
         log("Aucun fichier SQL à déployer.")
@@ -226,7 +253,15 @@ def main(argv: list[str]) -> int:
         log(f"  - {f}")
 
     results: list[tuple[str, bool, str]] = []  # (fichier, succès, détail)
-    conn = connect()
+    try:
+        conn = connect()
+    except Exception as exc:  # noqa: BLE001
+        cause = describe_snowflake_error(exc)
+        log(f"❌ Connexion à Snowflake impossible : {cause}")
+        print(f"::error title=Connexion Snowflake::{cause}")
+        write_step_summary(f"### Déploiement {target_env}\n\n❌ Connexion à Snowflake impossible : {cause}\n")
+        return 1
+
     log(f"Connecté à Snowflake (account={os.environ['SNOWFLAKE_ACCOUNT']}, role={os.environ['SNOWFLAKE_ROLE']}, warehouse={os.environ['SNOWFLAKE_WAREHOUSE']})")
     try:
         cur = conn.cursor()
