@@ -58,13 +58,18 @@ Chaque fichier `.sql` est un bloc anonyme Snowflake Scripting
   exemple) : elle sera automatiquement réécrite (`DEV`/`QUA`/`PRD`) par le
   déploiement selon la branche cible — inutile de la modifier à la main
   avant une PR.
-- Pas de nom de base/schéma en dur (`DEV_...`/`QUA_...`/`PRD_...`) ailleurs
-  que dans la déclaration de variable : utiliser `vDatabase`/`vEnv`.
+- **Une seule base par environnement** (`DEV`, `QUA`, `PRD`) ; les zones
+  (`BRZ`/`SLV`/`GLD`) sont des **schémas** à l'intérieur de cette base, pas
+  des bases séparées. Référencer la base via `vEnv` (ex.
+  `IDENTIFIER(:vEnv)`), jamais en dur.
+- Pas de nom de base en dur (`DEV`/`QUA`/`PRD` utilisé tel quel ailleurs que
+  dans la déclaration de la variable `vEnv`).
 - Un warehouse référencé en dur (`WAREHOUSE = ...`, utilisé par les tables
   dynamiques et les tasks — cette clause n'accepte pas de variable de
   session) doit être préfixé par un code d'environnement reconnu
   (`DEV_.../QUA_.../PRD_...`) : il sera lui aussi réécrit automatiquement
-  au déploiement.
+  au déploiement. (C'est la seule convention où l'environnement reste un
+  *préfixe*, par nom de warehouse — pas un nom de base.)
 - Un en-tête de commentaire (bloc `/* ... Auteur / Date / Description ... */`).
 - Pas de mot de passe ni de clé privée en clair dans le script.
 
@@ -89,10 +94,11 @@ réécriture de `vEnv`/warehouse...), voir le README de
 ### 5.1 Comptes de service Snowflake
 
 Deux comptes de service suffisent (aucun déploiement automatique ne va sur
-DEV) :
+DEV). Une seule base par environnement (`QUA`, `PRD`) ; les zones
+(`BRZ`/`SLV`/`GLD`) sont des schémas à l'intérieur :
 
 ```sql
--- Compte QUAL : accès uniquement aux bases QUA_*
+-- Compte QUAL : accès uniquement à la base QUA
 CREATE USER SVC_CICD_QUAL
   RSA_PUBLIC_KEY = '<clé publique PEM>'
   DEFAULT_ROLE = ROLE_CICD_QUAL
@@ -101,10 +107,14 @@ CREATE USER SVC_CICD_QUAL
 
 CREATE ROLE ROLE_CICD_QUAL;
 GRANT USAGE ON WAREHOUSE <NOM_WAREHOUSE_QUAL> TO ROLE ROLE_CICD_QUAL;
-GRANT ALL ON DATABASE QUA_<ZONE> TO ROLE ROLE_CICD_QUAL;  -- une ligne par zone (brz/slv/gld) à autoriser
+GRANT ALL ON DATABASE QUA TO ROLE ROLE_CICD_QUAL;
+GRANT ALL ON ALL SCHEMAS IN DATABASE QUA TO ROLE ROLE_CICD_QUAL;
+GRANT ALL ON FUTURE SCHEMAS IN DATABASE QUA TO ROLE ROLE_CICD_QUAL;
+GRANT ALL ON ALL TABLES IN DATABASE QUA TO ROLE ROLE_CICD_QUAL;
+GRANT ALL ON FUTURE TABLES IN DATABASE QUA TO ROLE ROLE_CICD_QUAL;
 GRANT ROLE ROLE_CICD_QUAL TO USER SVC_CICD_QUAL;
 
--- Compte PROD : accès uniquement aux bases PRD_*
+-- Compte PROD : accès uniquement à la base PRD
 CREATE USER SVC_CICD_PROD
   RSA_PUBLIC_KEY = '<clé publique PEM>'
   DEFAULT_ROLE = ROLE_CICD_PROD
@@ -113,7 +123,11 @@ CREATE USER SVC_CICD_PROD
 
 CREATE ROLE ROLE_CICD_PROD;
 GRANT USAGE ON WAREHOUSE <NOM_WAREHOUSE_PROD> TO ROLE ROLE_CICD_PROD;
-GRANT ALL ON DATABASE PRD_<ZONE> TO ROLE ROLE_CICD_PROD;  -- une ligne par zone (brz/slv/gld) à autoriser
+GRANT ALL ON DATABASE PRD TO ROLE ROLE_CICD_PROD;
+GRANT ALL ON ALL SCHEMAS IN DATABASE PRD TO ROLE ROLE_CICD_PROD;
+GRANT ALL ON FUTURE SCHEMAS IN DATABASE PRD TO ROLE ROLE_CICD_PROD;
+GRANT ALL ON ALL TABLES IN DATABASE PRD TO ROLE ROLE_CICD_PROD;
+GRANT ALL ON FUTURE TABLES IN DATABASE PRD TO ROLE ROLE_CICD_PROD;
 GRANT ROLE ROLE_CICD_PROD TO USER SVC_CICD_PROD;
 ```
 
