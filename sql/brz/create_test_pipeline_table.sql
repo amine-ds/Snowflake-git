@@ -7,12 +7,13 @@
 DECLARE
     --Déclaration de l'environnement, seule variable à modifier pour la livraison
     vEnv varchar := 'DEV';
-    vZone varchar := 'BRZ';
-    vDatabase varchar := :vEnv || '_' || :vZone;
-    vTable varchar := 'SIDTRAFIC_BRZ.TEST_PIPELINE';
-    vTableComplet varchar := :vDatabase || '.' || :vTable;
+    --Une seule base par environnement (DEV/QUA/PRD) ; la zone est un schéma
+    --à l'intérieur de cette base (BRZ/SLV/GLD), pas une base séparée.
+    vSchema varchar := 'BRZ';
+    vTable varchar := 'TEST_PIPELINE';
+    vTableComplet varchar := :vEnv || '.' || :vSchema || '.' || :vTable;
 BEGIN
-    USE DATABASE IDENTIFIER(:vDatabase);
+    USE DATABASE IDENTIFIER(:vEnv);
 
     CREATE TABLE IF NOT EXISTS IDENTIFIER(:vTableComplet)
     (
