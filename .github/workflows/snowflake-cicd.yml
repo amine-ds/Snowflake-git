@@ -89,10 +89,19 @@ jobs:
     needs: [determine-target, lint]
     runs-on: ubuntu-latest
     environment: ${{ needs.determine-target.outputs.environment_name }}
+    # Ce job pousse un commit sur la branche de la PR après déploiement
+    # (voir plus bas) : il lui faut l'écriture sur le contenu du dépôt, en
+    # plus de la lecture par défaut du workflow.
+    permissions:
+      contents: write
     steps:
       - name: Checkout du code SQL (ce dépôt)
         uses: actions/checkout@v4
         with:
+          # La branche réelle de la PR (pas le merge ref par défaut des
+          # événements pull_request), pour pouvoir committer et pousser
+          # dessus juste après le déploiement.
+          ref: ${{ github.head_ref }}
           fetch-depth: 0
 
       - name: Checkout des scripts de pipeline (snowflake-admin)
@@ -129,3 +138,30 @@ jobs:
           SNOWFLAKE_WAREHOUSE: ${{ secrets.SNOWFLAKE_WAREHOUSE }}
           TARGET_ENV: ${{ needs.determine-target.outputs.target_env }}
         run: python _admin/scripts/deploy_snowflake.py ${{ steps.changed.outputs.files }}
+
+      # Les deux étapes ci-dessous ne s'exécutent que si le déploiement a
+      # réussi (comportement par défaut d'un step sans `if: always()`).
+      # Elles réécrivent dans le(s) fichier(s) de CETTE branche la valeur
+      # exacte qui vient d'être déployée (vEnv, warehouse), pour que le
+      # dépôt reflète ce qui tourne réellement en Snowflake — sans quoi le
+      # fichier garde pour toujours la valeur écrite par le développeur
+      # (ex. vEnv='DEV'), même après un déploiement prod réussi.
+      - name: Réécrire l'état déployé dans le(s) fichier(s)
+        if: steps.changed.outputs.files != ''
+        id: rewrite
+        env:
+          TARGET_ENV: ${{ needs.determine-target.outputs.target_env }}
+        run: |
+          set -o pipefail
+          modified=$(python _admin/scripts/rewrite_deployed_state.py ${{ steps.changed.outputs.files }} | tr '\n' ' ')
+          echo "modified=$modified" >> "$GITHUB_OUTPUT"
+          echo "Fichier(s) réécrit(s) : $modified"
+
+      - name: Committer et pousser l'état déployé
+        if: steps.changed.outputs.files != '' && steps.rewrite.outputs.modified != ''
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add ${{ steps.rewrite.outputs.modified }}
+          git commit -m "Déploiement ${{ needs.determine-target.outputs.target_env }} : état réellement déployé"
+          git push origin HEAD:${{ github.head_ref }}
