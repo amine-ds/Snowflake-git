@@ -1,14 +1,16 @@
-name: Snowflake CI/CD (caller)
+name: Snowflake CI/CD
 
-# Workflow "appelant" : la logique de lint + déploiement (scripts, étapes)
-# vit dans le dépôt amine-ds/snowflake-admin, invoquée ici à chaque PR vers
-# QUAL ou PRD via un reusable workflow. Les Environments GitHub (qual, prod)
-# et leurs secrets Snowflake vivent en revanche ICI, dans ce dépôt (voir
-# README section 5) : c'est ce dépôt qui possède les données qu'il déploie,
-# donc les accès et les validations. C'est pourquoi le job `deploy`
-# ci-dessous porte lui-même `environment:` et `secrets: inherit`, pour
-# transmettre les secrets de l'Environment actif jusqu'au workflow
-# réutilisable.
+# Les scripts (lint_sql.py, deploy_snowflake.py) vivent dans le dépôt
+# amine-ds/snowflake-admin, mutualisés. Chaque job les récupère via un
+# second `actions/checkout` (dossier _admin/), à côté du checkout normal de
+# CE dépôt qui apporte les fichiers sql/.
+#
+# Les Environments GitHub (qual, prod) et leurs secrets Snowflake vivent
+# EN REVANCHE ICI, dans ce dépôt — voir README section 5 — car c'est ce
+# dépôt qui possède les données qu'il déploie. GitHub n'autorise pas la clé
+# `environment:` sur un job qui appelle un reusable workflow (`uses:`),
+# donc on ne passe pas par ce mécanisme : le `environment:` ci-dessous est
+# posé directement sur un job normal, qui exécute lui-même les étapes.
 #
 # Rappel du modèle : une branche de ticket est créée depuis PRD, mergée
 # dans DEV (aucune pipeline), puis une PR vers QUAL (lint + déploiement
@@ -48,11 +50,79 @@ jobs:
             echo "environment_name=qual" >> "$GITHUB_OUTPUT"
           fi
 
-  deploy:
-    name: Lint + déploiement (snowflake-admin)
+  lint:
+    name: Lint SQL
     needs: determine-target
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout du code SQL (ce dépôt)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout des scripts de pipeline (snowflake-admin)
+        uses: actions/checkout@v4
+        with:
+          repository: amine-ds/snowflake-admin
+          ref: main
+          path: _admin
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Lister les fichiers SQL modifiés
+        id: changed
+        run: |
+          git fetch origin ${{ github.base_ref }} --depth=1
+          files=$(git diff --name-only origin/${{ github.base_ref }}...HEAD -- 'sql/**/*.sql' | tr '\n' ' ')
+          echo "files=$files" >> "$GITHUB_OUTPUT"
+          echo "Fichiers modifiés : $files"
+
+      - name: Lint
+        if: steps.changed.outputs.files != ''
+        run: python _admin/scripts/lint_sql.py ${{ steps.changed.outputs.files }}
+
+  deploy:
+    name: Déploiement Snowflake (${{ needs.determine-target.outputs.target_env }})
+    needs: [determine-target, lint]
+    runs-on: ubuntu-latest
     environment: ${{ needs.determine-target.outputs.environment_name }}
-    uses: amine-ds/snowflake-admin/.github/workflows/snowflake-deploy.yml@main
-    secrets: inherit
-    with:
-      target_env: ${{ needs.determine-target.outputs.target_env }}
+    steps:
+      - name: Checkout du code SQL (ce dépôt)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout des scripts de pipeline (snowflake-admin)
+        uses: actions/checkout@v4
+        with:
+          repository: amine-ds/snowflake-admin
+          ref: main
+          path: _admin
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Installer les dépendances
+        run: pip install -r _admin/scripts/requirements.txt
+
+      - name: Lister les fichiers SQL modifiés
+        id: changed
+        run: |
+          git fetch origin ${{ github.base_ref }} --depth=1
+          files=$(git diff --name-only origin/${{ github.base_ref }}...HEAD -- 'sql/**/*.sql' | tr '\n' ' ')
+          echo "files=$files" >> "$GITHUB_OUTPUT"
+
+      - name: Déploiement sur Snowflake
+        if: steps.changed.outputs.files != ''
+        env:
+          SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+          SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+          SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SNOWFLAKE_PRIVATE_KEY }}
+          SNOWFLAKE_PRIVATE_KEY_PASSPHRASE: ${{ secrets.SNOWFLAKE_PRIVATE_KEY_PASSPHRASE }}
+          SNOWFLAKE_ROLE: ${{ secrets.SNOWFLAKE_ROLE }}
+          SNOWFLAKE_WAREHOUSE: ${{ secrets.SNOWFLAKE_WAREHOUSE }}
+          TARGET_ENV: ${{ needs.determine-target.outputs.target_env }}
+        run: python _admin/scripts/deploy_snowflake.py ${{ steps.changed.outputs.files }}
