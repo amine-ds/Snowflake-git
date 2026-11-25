@@ -1,11 +1,13 @@
 # snowflake-git — scripts SQL Snowflake
 
-Ce dépôt contient uniquement le code SQL à déployer sur Snowflake. La
-logique de lint et de déploiement (scripts, workflow GitHub Actions,
-secrets, validations) vit dans un dépôt séparé :
-**[amine-ds/snowflake-admin](https://github.com/amine-ds/snowflake-admin)**
-— voir son README pour l'architecture complète et la mise en place des
-Environments/secrets.
+Ce dépôt contient le code SQL à déployer sur Snowflake, les 3 branches
+longues `DEV`/`QUAL`/`PRD`, et les Environments GitHub `qual`/`prod` avec
+leurs secrets. La logique de lint et de déploiement (scripts Python,
+étapes du workflow) vit dans un dépôt séparé et mutualisé :
+**[amine-ds/snowflake-admin](https://github.com/amine-ds/snowflake-admin)**,
+invoquée ici via un reusable workflow — voir son README pour le détail de
+ce mécanisme. Les secrets Snowflake, eux, restent dans **ce** dépôt (section
+5 ci-dessous), puisque c'est lui qui possède les données qu'il déploie.
 
 ## 1. Modèle de branches
 
@@ -78,6 +80,79 @@ en-tête :
 respecte alors cet ordre avant celui des zones. Une dépendance vers un
 script déjà déployé par une PR précédente n'a pas besoin d'être déclarée.
 
-Pour le détail du fonctionnement du lint et du déploiement (secrets,
-Environments GitHub, comptes de service Snowflake), voir le README de
+Pour le détail du fonctionnement du lint et du déploiement eux-mêmes (tri,
+réécriture de `vEnv`/warehouse...), voir le README de
 [snowflake-admin](https://github.com/amine-ds/snowflake-admin).
+
+## 5. Mise en place (comptes de service, Environments, secrets)
+
+### 5.1 Comptes de service Snowflake
+
+Deux comptes de service suffisent (aucun déploiement automatique ne va sur
+DEV) :
+
+```sql
+-- Compte QUAL : accès uniquement aux bases QUA_*
+CREATE USER SVC_CICD_QUAL
+  RSA_PUBLIC_KEY = '<clé publique PEM>'
+  DEFAULT_ROLE = ROLE_CICD_QUAL
+  DEFAULT_WAREHOUSE = <NOM_WAREHOUSE_QUAL>
+  MUST_CHANGE_PASSWORD = FALSE;
+
+CREATE ROLE ROLE_CICD_QUAL;
+GRANT USAGE ON WAREHOUSE <NOM_WAREHOUSE_QUAL> TO ROLE ROLE_CICD_QUAL;
+GRANT ALL ON DATABASE QUA_<ZONE> TO ROLE ROLE_CICD_QUAL;  -- une ligne par zone (brz/slv/gld) à autoriser
+GRANT ROLE ROLE_CICD_QUAL TO USER SVC_CICD_QUAL;
+
+-- Compte PROD : accès uniquement aux bases PRD_*
+CREATE USER SVC_CICD_PROD
+  RSA_PUBLIC_KEY = '<clé publique PEM>'
+  DEFAULT_ROLE = ROLE_CICD_PROD
+  DEFAULT_WAREHOUSE = <NOM_WAREHOUSE_PROD>
+  MUST_CHANGE_PASSWORD = FALSE;
+
+CREATE ROLE ROLE_CICD_PROD;
+GRANT USAGE ON WAREHOUSE <NOM_WAREHOUSE_PROD> TO ROLE ROLE_CICD_PROD;
+GRANT ALL ON DATABASE PRD_<ZONE> TO ROLE ROLE_CICD_PROD;  -- une ligne par zone (brz/slv/gld) à autoriser
+GRANT ROLE ROLE_CICD_PROD TO USER SVC_CICD_PROD;
+```
+
+Génération de la paire de clés (à faire une fois, en local, jamais commitée) :
+
+```bash
+openssl genrsa 2048 | openssl pkcs8 -topk8 -inform PEM -out rsa_key.p8 -nocrypt
+openssl rsa -in rsa_key.p8 -pubout -out rsa_key.pub
+```
+`rsa_key.pub` (sans les en-têtes `-----BEGIN/END-----`) va dans
+`RSA_PUBLIC_KEY` côté Snowflake ; `rsa_key.p8` va dans le secret GitHub
+`SNOWFLAKE_PRIVATE_KEY`.
+
+> Important : chaque rôle ne doit avoir **aucun droit** sur les objets de
+> l'autre environnement (vérifier qu'aucun grant transverse n'existe, p. ex.
+> sur un rôle public).
+
+### 5.2 GitHub Environments — DANS CE DÉPÔT (snowflake-git)
+
+`Settings > Environments` (sur `amine-ds/Snowflake-git`) → créer deux
+environnements :
+
+**`qual`**
+- Pas de "Required reviewers" (déploiement automatique, sans validation).
+- Environment secrets : `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER` (`SVC_CICD_QUAL`),
+  `SNOWFLAKE_PRIVATE_KEY`, `SNOWFLAKE_PRIVATE_KEY_PASSPHRASE` (si clé
+  chiffrée), `SNOWFLAKE_ROLE` (`ROLE_CICD_QUAL`), `SNOWFLAKE_WAREHOUSE`.
+
+**`prod`**
+- **Required reviewers** : ajouter le ou les comptes GitHub des admins
+  Snowflake habilités à valider le déploiement prod.
+- Ne PAS utiliser "Deployment branches and tags" restreint à une branche :
+  pour un job déclenché par une PR, la branche du run est
+  `refs/pull/<n>/merge`, jamais `PRD` littéralement — cette restriction
+  rejetterait tous les déploiements (piège déjà rencontré avec l'ancien
+  modèle à une seule branche `main`). Laisser "No restriction".
+- Environment secrets : mêmes noms que ci-dessus, avec les valeurs du
+  compte `SVC_CICD_PROD` / `ROLE_CICD_PROD`.
+
+Ces noms d'Environment (`qual`/`prod`) doivent correspondre exactement à
+ceux utilisés dans `.github/workflows/snowflake-cicd.yml`
+(`environment_name` calculé selon la branche cible).

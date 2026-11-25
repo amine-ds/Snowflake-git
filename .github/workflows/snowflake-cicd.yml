@@ -1,10 +1,14 @@
 name: Snowflake CI/CD (caller)
 
-# Workflow "appelant" : la logique de lint + déploiement vit dans le dépôt
-# amine-ds/snowflake-admin (workflow réutilisable), invoquée ici à chaque PR
-# vers QUAL ou PRD. Voir le README de snowflake-admin pour le détail complet
-# de l'architecture, le modèle de promotion par branches, et la mise en
-# place des Environments GitHub (qui vivent dans snowflake-admin, pas ici).
+# Workflow "appelant" : la logique de lint + déploiement (scripts, étapes)
+# vit dans le dépôt amine-ds/snowflake-admin, invoquée ici à chaque PR vers
+# QUAL ou PRD via un reusable workflow. Les Environments GitHub (qual, prod)
+# et leurs secrets Snowflake vivent en revanche ICI, dans ce dépôt (voir
+# README section 5) : c'est ce dépôt qui possède les données qu'il déploie,
+# donc les accès et les validations. C'est pourquoi le job `deploy`
+# ci-dessous porte lui-même `environment:` et `secrets: inherit`, pour
+# transmettre les secrets de l'Environment actif jusqu'au workflow
+# réutilisable.
 #
 # Rappel du modèle : une branche de ticket est créée depuis PRD, mergée
 # dans DEV (aucune pipeline), puis une PR vers QUAL (lint + déploiement
@@ -47,7 +51,8 @@ jobs:
   deploy:
     name: Lint + déploiement (snowflake-admin)
     needs: determine-target
+    environment: ${{ needs.determine-target.outputs.environment_name }}
     uses: amine-ds/snowflake-admin/.github/workflows/snowflake-deploy.yml@main
+    secrets: inherit
     with:
       target_env: ${{ needs.determine-target.outputs.target_env }}
-      environment_name: ${{ needs.determine-target.outputs.environment_name }}
